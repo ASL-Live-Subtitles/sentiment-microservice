@@ -1,32 +1,37 @@
 from __future__ import annotations
-
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import datetime
-from typing import Dict, List
 from uuid import UUID, uuid4
+from typing import List
 
 from fastapi import FastAPI, HTTPException, Path
 
-from models.sentiment import TextInput, SentimentResult
+# Local imports
+from models.sentiment import TextInput, SentimentResult, SentimentUpdate
+from db.sentiment_service import SentimentMySQLService
+
+import os
+
+print(f"DB_HOST={os.environ.get('DB_HOST')}, DB_USER={os.environ.get('DB_USER')}")
+
 
 
 # -----------------------------------------------------------------------------
-# App
+# Initialize app
 # -----------------------------------------------------------------------------
 app = FastAPI(
-    title="Sentiment Analysis Microservice",
-    description="Minimal API-first skeleton with in-memory storage.",
-    version="0.1.0",
+    title="Sentiment Analysis Microservice (DB version)",
+    description="FastAPI service connected to MySQL via SentimentMySQLService.",
+    version="0.2.0",
 )
 
-# -----------------------------------------------------------------------------
-# In-memory store (fake DB)
-# -----------------------------------------------------------------------------
-# Key: sentiment UUID; Value: SentimentResult
-sentiments: Dict[UUID, SentimentResult] = {}
 
-
+# -----------------------------------------------------------------------------
+# Helper function: dummy analyzer (to be replaced by Hume.ai)
+# -----------------------------------------------------------------------------
 def make_result(text: str) -> SentimentResult:
-    """Create a placeholder sentiment result (to be replaced by real model/Hume)."""
+    """Return a placeholder sentiment result for now."""
     return SentimentResult(
         id=uuid4(),
         text=text,
@@ -41,53 +46,93 @@ def make_result(text: str) -> SentimentResult:
 # -----------------------------------------------------------------------------
 @app.get("/sentiments", response_model=List[SentimentResult])
 def list_sentiments():
-    """Return all sentiment results."""
-    return list(sentiments.values())
+    """
+    Retrieve all sentiment records from MySQL.
+    """
+    service = SentimentMySQLService()
+    try:
+        results = service.retrieve_all()
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        service.close_connection()
 
 
 @app.post("/sentiments", response_model=SentimentResult, status_code=201)
 def create_sentiment(payload: TextInput):
-    """Create a new sentiment result from input text."""
+    """
+    Create a new sentiment record: insert into requests + sentiments tables.
+    """
+    service = SentimentMySQLService()
     result = make_result(payload.text)
-    sentiments[result.id] = result
-    return result
+    try:
+        print(payload)
+        print(result)
+        service.create(payload, result)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    finally:
+        service.close_connection()
 
 
 @app.get("/sentiments/{sentiment_id}", response_model=SentimentResult)
-def get_sentiment(
-    sentiment_id: UUID = Path(..., description="Sentiment result ID.")
-):
-    """Return a single sentiment result by ID."""
-    item = sentiments.get(sentiment_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Sentiment not found")
-    return item
+def get_sentiment(sentiment_id: UUID = Path(..., description="Sentiment record ID")):
+    """
+    Retrieve one sentiment record by ID (JOIN requests + sentiments).
+    """
+    service = SentimentMySQLService()
+    try:
+        record = service.retrieve(sentiment_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Sentiment not found")
+        return record
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    finally:
+        service.close_connection()
 
 
 @app.put("/sentiments/{sentiment_id}", response_model=SentimentResult)
-def put_sentiment(
-    sentiment_id: UUID,
-    payload: TextInput,
-):
+def update_sentiment(sentiment_id: UUID, payload: SentimentUpdate):
     """
-    Replace an existing sentiment result with a new one generated from input text.
-    Keeps the same ID to mimic full replacement semantics.
+    Update an existing sentiment record by ID.
     """
-    if sentiment_id not in sentiments:
+    service = SentimentMySQLService()
+
+    # 取舊資料
+    existing = service.retrieve(sentiment_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Sentiment not found")
-    updated = make_result(payload.text)
-    updated.id = sentiment_id  # preserve ID for PUT semantics
-    sentiments[sentiment_id] = updated
-    return updated
+
+    # 合併新資料
+    updated_data = existing.model_dump()
+    updated_data.update(payload.model_dump(exclude_unset=True))
+    updated = SentimentResult(**updated_data)
+
+    try:
+        result = service.update(sentiment_id, updated)
+        return result
+    finally:
+        service.close_connection()
 
 
 @app.delete("/sentiments/{sentiment_id}", status_code=204)
 def delete_sentiment(sentiment_id: UUID):
-    """Delete a sentiment result by ID."""
-    if sentiment_id not in sentiments:
-        raise HTTPException(status_code=404, detail="Sentiment not found")
-    del sentiments[sentiment_id]
-    return None
+    """
+    Delete a sentiment and its corresponding request record.
+    """
+    service = SentimentMySQLService()
+    try:
+        deleted = service.delete(sentiment_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Sentiment not found")
+        return None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    finally:
+        service.close_connection()
 
 
 # -----------------------------------------------------------------------------
@@ -95,8 +140,8 @@ def delete_sentiment(sentiment_id: UUID):
 # -----------------------------------------------------------------------------
 @app.get("/")
 def root():
-    """Simple health/info endpoint."""
-    return {"message": "Sentiment API ready. See /docs for OpenAPI UI."}
+    """Simple root endpoint."""
+    return {"message": "Sentiment Analysis API connected to MySQL. See /docs for UI."}
 
 
 # -----------------------------------------------------------------------------

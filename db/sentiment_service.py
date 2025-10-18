@@ -1,5 +1,5 @@
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 import mysql.connector
 from mysql.connector.cursor import MySQLCursor
 
@@ -49,6 +49,8 @@ class SentimentMySQLService(AbstractBaseMySQLService):
         cursor: MySQLCursor = conn.cursor()
 
         try:
+
+            request_id = uuid4()
             # SQL for the 'requests' table
             # created_at is handled by the DB or Python's datetime if not set by DB
             request_sql = """
@@ -56,10 +58,10 @@ class SentimentMySQLService(AbstractBaseMySQLService):
             VALUES (%s, %s, %s, %s)
             """
             request_params = (
-                str(result_data.request_id),
+                str(request_id),
                 request_data.text,
                 result_data.analyzed_at,
-                str(request_data.user_id)
+                "user-123"  # Placeholder user_id; replace with actual user_id if available
             )
             cursor.execute(request_sql, request_params)
             
@@ -70,7 +72,7 @@ class SentimentMySQLService(AbstractBaseMySQLService):
             """
             sentiment_params = (
                 str(result_data.id),
-                str(result_data.request_id),
+                str(request_id),
                 result_data.sentiment,
                 result_data.confidence,
                 result_data.analyzed_at
@@ -181,7 +183,7 @@ class SentimentMySQLService(AbstractBaseMySQLService):
 
         try:
             cursor.execute(sql, params)
-            
+            conn.commit()
             if cursor.rowcount == 0:
                 return None  # Record not found
             

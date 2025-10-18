@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
+from typing import Optional
 
 # -------------------------------
 # INPUT models
@@ -63,3 +64,9 @@ class SentimentResult(BaseModel):
             }
         }
     }
+
+
+class SentimentUpdate(BaseModel):
+    sentiment: Optional[str] = Field(None, description="Updated sentiment label")
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    analyzed_at: Optional[datetime] = Field(None, description="Updated timestamp (UTC)")
