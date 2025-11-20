@@ -5,12 +5,12 @@ load_dotenv()  # Must be first so env is available during imports
 
 from datetime import datetime
 from uuid import UUID, uuid4
-from typing import List, Optional
+from typing import List, Optional, Dict
 
-from fastapi import FastAPI, HTTPException, Path, Query, Request, Response, Header
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
-from models.sentiment import TextInput, SentimentResult, SentimentUpdate, SentimentLinks
+from models.sentiment import TextInput, SentimentResult, SentimentUpdate, SentimentLinks, SentimentJobStatus, SentimentJobLinks
 from db.sentiment_service import SentimentMySQLService
 
 import os
@@ -33,6 +33,7 @@ app = FastAPI(
 #     allow_headers=["*"],
 # )
 
+sentiment_jobs: Dict[UUID, SentimentJobStatus] = {}
 
 def make_result(text: str) -> SentimentResult:
     """Dummy analyzer; will be replaced by Hume.ai client later."""
@@ -72,6 +73,59 @@ def attach_links(sentiment: SentimentResult) -> SentimentResult:
             collection="/sentiments",
         ),
     )
+
+def attach_job_links(job: SentimentJobStatus) -> SentimentJobStatus:
+    """
+    Attach hypermedia links (relative paths) to a SentimentJobStatus.
+
+    - links.self   -> /sentiment-async/{job_id}
+    - links.result -> /sentiments/{result_id}  (only when completed)
+    """
+    data = job.model_dump(exclude={"links"})  # avoid double-assignment of 'links'
+
+    links = SentimentJobLinks(
+        self=f"/sentiment-async/{job.id}",
+        result=f"/sentiments/{job.result_id}" if job.result_id else None,
+    )
+
+    return SentimentJobStatus(**data, links=links)
+
+def run_sentiment_job(job_id: UUID, text: str) -> None:
+    """
+    Background task that:
+    1. Updates job status to 'running'
+    2. Runs sentiment analysis and writes to DB
+    3. Updates job status to 'completed' or 'failed'
+    """
+    now = datetime.utcnow()
+
+    job = sentiment_jobs.get(job_id)
+    if not job:
+        return  # Should not happen, but guard anyway
+
+    # Mark job as running
+    job.status = "running"
+    job.updated_at = now
+    sentiment_jobs[job_id] = job
+
+    try:
+        # Run "real" sentiment creation (same as your sync POST /sentiments)
+        result = make_result(text)
+        with SentimentMySQLService() as service:
+            created = service.create(TextInput(text=text), result)
+
+        # Mark job as completed and store result_id
+        job.status = "completed"
+        job.updated_at = datetime.utcnow()
+        job.result_id = created.id
+        sentiment_jobs[job_id] = job
+
+    except Exception as e:
+        # Mark job as failed
+        job.status = "failed"
+        job.updated_at = datetime.utcnow()
+        job.error_message = str(e)
+        sentiment_jobs[job_id] = job
 
 @app.get("/db_check", tags=["meta"])
 def health():
@@ -233,3 +287,65 @@ if __name__ == "__main__":
     import uvicorn
     # In prod, prefer systemd or process manager; this is dev convenience.
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+@app.post(
+    "/sentiment-async",
+    status_code=202,
+    response_model=SentimentJobStatus,
+    tags=["async"],
+)
+def create_async_sentiment(
+    payload: TextInput,
+    background_tasks: BackgroundTasks,
+    response: Response,
+):
+    """
+    Create a sentiment analysis job asynchronously.
+
+    - Returns 202 Accepted (job accepted, not yet finished)
+    - Starts a background task to run the actual analysis
+    - Sets Location header to /sentiment-async/{job_id}
+    - Returns a SentimentJobStatus with status='pending'
+    """
+    job_id = uuid4()
+    now = datetime.utcnow()
+
+    job = SentimentJobStatus(
+        id=job_id,
+        status="pending",
+        created_at=now,
+        updated_at=now,
+        result_id=None,
+        error_message=None,
+        links=None,
+    )
+    sentiment_jobs[job_id] = job
+
+    # Schedule background work
+    background_tasks.add_task(run_sentiment_job, job_id, payload.text)
+
+    # Expose relative path to the job resource
+    response.headers["Location"] = f"/sentiment-async/{job_id}"
+
+    return attach_job_links(job)
+
+@app.get(
+    "/sentiment-async/{job_id}",
+    response_model=SentimentJobStatus,
+    tags=["sentiments", "async"],
+)
+def get_async_sentiment_status(
+    job_id: UUID = Path(..., description="Sentiment async job ID"),
+):
+    """
+    Poll the status of an asynchronous sentiment analysis job.
+
+    - When status is 'pending' or 'running', result_id will be null.
+    - When status is 'completed', result_id will hold the SentimentResult.id.
+    - When status is 'failed', error_message may contain more details.
+    """
+    job = sentiment_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return attach_job_links(job)
