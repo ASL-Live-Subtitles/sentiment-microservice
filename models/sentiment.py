@@ -21,6 +21,18 @@ class TextInput(BaseModel):
         }
     }
 
+class SentimentLinks(BaseModel):
+    """Hypermedia links related to a sentiment resource."""
+    self: str = Field(
+        ...,
+        description="Relative URL of this sentiment resource.",
+        json_schema_extra={"example": "/sentiments/550e8400-e29b-41d4-a716-446655440000"},
+    )
+    collection: str = Field(
+        ...,
+        description="Relative URL of the sentiments collection.",
+        json_schema_extra={"example": "/sentiments"},
+    )
 # -------------------------------
 # OUTPUT models
 # -------------------------------
@@ -52,6 +64,10 @@ class SentimentResult(BaseModel):
         description="Timestamp (UTC) when the analysis was performed.",
         json_schema_extra={"example": "2025-10-16T12:34:56Z"},
     )
+    links: Optional[SentimentLinks] = Field(
+        default=None,
+        description="Hypermedia links (relative paths) for this sentiment resource.",
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -61,6 +77,10 @@ class SentimentResult(BaseModel):
                 "sentiment": "neutral",
                 "confidence": 0.63,
                 "analyzed_at": "2025-10-16T12:34:56Z",
+                "links": {
+                    "self": "/sentiments/550e8400-e29b-41d4-a716-446655440000",
+                    "collection": "/sentiments"
+                }
             }
         }
     }

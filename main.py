@@ -10,7 +10,7 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Path, Query, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 
-from models.sentiment import TextInput, SentimentResult, SentimentUpdate
+from models.sentiment import TextInput, SentimentResult, SentimentUpdate, SentimentLinks
 from db.sentiment_service import SentimentMySQLService
 
 import os
@@ -58,6 +58,21 @@ def compute_etag(sentiment: SentimentResult) -> str:
     ts = int(sentiment.analyzed_at.timestamp())
     return f'W/"{sentiment.id}-{ts}"'
 
+def attach_links(sentiment: SentimentResult) -> SentimentResult:
+    """
+    Return a new SentimentResult including hypermedia links
+    using relative paths (linked data requirement).
+    """
+    data = sentiment.model_dump(exclude={"links"})
+
+    return SentimentResult(
+        **data,
+        links=SentimentLinks(
+            self=f"/sentiments/{sentiment.id}",
+            collection="/sentiments",
+        ),
+    )
+
 @app.get("/db_check", tags=["meta"])
 def health():
     """
@@ -85,7 +100,7 @@ def list_sentiments(
     try:
         with SentimentMySQLService() as service:
             results = service.retrieve_all(limit=limit, offset=offset)
-            return results
+        return [attach_links(r) for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
@@ -102,17 +117,12 @@ def create_sentiment(payload: TextInput, response: Response):
     """
     try:
         with SentimentMySQLService() as service:
-            # 1. produce initial (dummy) analysis result
             result = make_result(payload.text)
-
-            # 2. persist to DB, service.create returns the joined record (with id, text, ...)
             created = service.create(payload, result)
 
-            # 3. set Location header to the new resource's URL (relative path)
-            response.headers["Location"] = f"/sentiments/{created.id}"
-
-            # 4. return the created resource as the response body
-            return created
+        created = attach_links(created)
+        response.headers["Location"] = f"/sentiments/{created.id}"
+        return created
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -131,7 +141,6 @@ def create_sentiment(payload: TextInput, response: Response):
     })
 def get_sentiment(
     sentiment_id: UUID = Path(..., description="Sentiment record ID"),
-    request: Request = None,
     response: Response = None,
     if_none_match: str | None = Header(default=None, description="ETag value for conditional GET"),
 ):
@@ -159,7 +168,8 @@ def get_sentiment(
 
         # Otherwise, send the resource and include the ETag header
         response.headers["ETag"] = current_etag
-        return record
+        record_with_links = attach_links(record)
+        return record_with_links
 
     except HTTPException:
         # Re-raise HTTPException directly (404, etc.)
