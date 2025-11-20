@@ -68,3 +68,6 @@ pytest_cache/
 .env
 .env.*
 logs/
+
+# YoYo AI version control directory
+.yoyo/
