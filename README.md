@@ -34,6 +34,8 @@ DB_HOST=34.xx.xx.xx
 DB_USER=sentiment_user
 DB_PASSWORD=xxxx
 DB_NAME=sentiment_detection
+
+EDENAI_API_KEY = "EDENAI_API_KEY"
 ```
 
 
@@ -116,7 +118,7 @@ curl -X 'GET' \
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "text": "I love this product!",
-  "sentiment": "positive",
+  "sentiment": "positive, negative, neutral",
   "confidence": 0.93,
   "analyzed_at": "2025-11-15T22:01:36",
   "links": {

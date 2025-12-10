@@ -38,18 +38,25 @@ from services.edenai_client import EdenAIClient
 sentiment_jobs: Dict[UUID, SentimentJobStatus] = {}
 edenai_client = EdenAIClient()
 
-def make_result(text: str) -> SentimentResult:
+def sentiment_analysis(text: str) -> SentimentResult:
     """Calls Eden AI and converts the result to our local model."""
-    response = edenai_client.analyze_sentiment(text)
+    best_result = edenai_client.analyze_sentiment(text)
     
-    # We will use the result from the 'google' provider
-    google_result = response.get("google", {})
+    if not best_result:
+        # Handle the case where analysis fails or returns no successful provider
+        return SentimentResult(
+            id=uuid4(),
+            text=text,
+            sentiment="unknown",
+            confidence=0.0,
+            analyzed_at=datetime.utcnow(),
+        )
     
     return SentimentResult(
         id=uuid4(),
         text=text,
-        sentiment=google_result.get("general_sentiment", "unknown").lower(),
-        confidence=google_result.get("general_sentiment_rate", 0.0),
+        sentiment=best_result.get("general_sentiment", "unknown").lower(),
+        confidence=best_result.get("general_sentiment_rate", 0.0),
         analyzed_at=datetime.utcnow(),
     )
 
@@ -118,7 +125,7 @@ def run_sentiment_job(job_id: UUID, text: str) -> None:
 
     try:
         # Run "real" sentiment creation (same as your sync POST /sentiments)
-        result = make_result(text)
+        result = sentiment_analysis(text)
         with SentimentMySQLService() as service:
             created = service.create(TextInput(text=text), result)
 
@@ -179,7 +186,7 @@ def create_sentiment(payload: TextInput, response: Response):
     """
     try:
         with SentimentMySQLService() as service:
-            result = make_result(payload.text)
+            result = sentiment_analysis(payload.text)
             created = service.create(payload, result)
 
         created = attach_links(created)
