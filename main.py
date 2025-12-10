@@ -33,15 +33,23 @@ app = FastAPI(
 #     allow_headers=["*"],
 # )
 
+from services.edenai_client import EdenAIClient
+
 sentiment_jobs: Dict[UUID, SentimentJobStatus] = {}
+edenai_client = EdenAIClient()
 
 def make_result(text: str) -> SentimentResult:
-    """Dummy analyzer; will be replaced by Hume.ai client later."""
+    """Calls Eden AI and converts the result to our local model."""
+    response = edenai_client.analyze_sentiment(text)
+    
+    # We will use the result from the 'google' provider
+    google_result = response.get("google", {})
+    
     return SentimentResult(
         id=uuid4(),
         text=text,
-        sentiment="neutral",
-        confidence=0.0,
+        sentiment=google_result.get("general_sentiment", "unknown").lower(),
+        confidence=google_result.get("general_sentiment_rate", 0.0),
         analyzed_at=datetime.utcnow(),
     )
 
@@ -332,7 +340,7 @@ def create_async_sentiment(
 @app.get(
     "/sentiment-async/{job_id}",
     response_model=SentimentJobStatus,
-    tags=["sentiments", "async"],
+    tags=["async"],
 )
 def get_async_sentiment_status(
     job_id: UUID = Path(..., description="Sentiment async job ID"),
