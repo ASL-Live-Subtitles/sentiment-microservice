@@ -250,28 +250,33 @@ def get_sentiment(
 @app.put("/sentiments/{sentiment_id}", response_model=SentimentResult, tags=["sentiments"])
 def update_sentiment(sentiment_id: UUID, payload: SentimentUpdate):
     """
-    Update an existing sentiment record by ID.
-    Only 'sentiment', 'confidence', 'analyzed_at' are mutable.
+    Update the **input text** for an existing sentiment record by ID
+    **and** re-run sentiment analysis on the new text.
+
+    Behavior:
+    - PUT updates the original text stored in the requests table (requests.input_text).
+    - It also re-computes sentiment, confidence and analyzed_at for this record
+      using the new text, and returns the updated SentimentResult.
     """
     try:
+        if payload.text is None:
+            raise HTTPException(status_code=400, detail="No text provided to update")
+
         with SentimentMySQLService() as service:
-            existing = service.retrieve(sentiment_id)
-            if not existing:
+            # Re-run sentiment analysis for the new text
+            new_result = sentiment_analysis(payload.text)
+
+            # Apply updates to both the request text and sentiment fields
+            updated = service.update_with_new_analysis(
+                sentiment_id=sentiment_id,
+                new_text=payload.text,
+                result_data=new_result,
+            )
+            if not updated:
                 raise HTTPException(status_code=404, detail="Sentiment not found")
 
-            merged = existing.model_dump()
-            # default analyzed_at to now if user didn't provide it
-            update_dict = payload.model_dump(exclude_unset=True)
-            if "analyzed_at" not in update_dict:
-                update_dict["analyzed_at"] = datetime.utcnow()
-
-            merged.update(update_dict)
-            updated = SentimentResult(**merged)
-
-            result = service.update(sentiment_id, updated)
-            if not result:
-                raise HTTPException(status_code=404, detail="Sentiment not found")
-            return result
+            # Keep consistent with other endpoints by attaching links
+            return attach_links(updated)
     except HTTPException:
         raise
     except Exception as e:

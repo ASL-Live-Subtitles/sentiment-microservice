@@ -87,9 +87,19 @@ class SentimentResult(BaseModel):
 
 
 class SentimentUpdate(BaseModel):
-    sentiment: Optional[str] = Field(None, description="Updated sentiment label")
-    confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
-    analyzed_at: Optional[datetime] = Field(None, description="Updated timestamp (UTC)")
+    """
+    Payload for updating an existing sentiment resource.
+
+    According to the updated requirements, this model allows updating
+    only the original input text (`text`) and does not directly modify
+    the sentiment analysis result (sentiment/confidence).
+    To obtain a new sentiment analysis for the updated text, call POST /sentiments again.
+    """
+    text: Optional[str] = Field(
+        None,
+        description="Updated raw input text for this sentiment request.",
+        json_schema_extra={"example": "I changed my mind, the product is just okay."},
+    )
 
 # -------------------------------
 # ASYNC JOB MODELS

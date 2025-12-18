@@ -57,7 +57,7 @@ def run_db_connection_test():
              print("HINT: Error 1130 means 'Host not allowed' - Check if 'skip-name-resolve = 1' is set and MySQL is restarted.")
              
     finally:
-        # 6. 關閉連線 (良好的習慣)
+        # Step 6: Close the connection (good practice)
         db_service.close_connection()
         print("--- Test Finished ---")
 

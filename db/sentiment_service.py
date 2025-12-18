@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Any
 from uuid import UUID, uuid4
 from mysql.connector.cursor import MySQLCursor
 
@@ -142,32 +142,135 @@ class SentimentMySQLService(AbstractBaseMySQLService):
             cursor.close()
 
     # ----------------------------- UPDATE ----------------------------
-    def update(self, sentiment_id: UUID, new_data: SentimentResult) -> Optional[SentimentResult]:
+    def update(self, *args: Any, **kwargs: Any) -> Optional[SentimentResult]:
         """
-        Update only sentiment fields; input_text/request_id remain immutable.
+        Generic update required by the abstract base class.
+
+        Historically this forwarded only to `update_text` (updating the input text).
+        To avoid API confusion, higher-level code should now prefer the more explicit
+        methods:
+          - update_text(...)                   -> only change original text
+          - update_with_new_analysis(...)      -> change text + sentiment result
+        """
+        sentiment_id: UUID
+        new_text: str
+
+        if args:
+            # Expecting positional form: (sentiment_id, new_text)
+            if len(args) < 2:
+                raise ValueError("update() expects (sentiment_id, new_text) or keyword arguments.")
+            sentiment_id = args[0]
+            new_text = args[1]
+        else:
+            # Keyword form: sentiment_id=..., text=...
+            if "sentiment_id" not in kwargs or "text" not in kwargs:
+                raise ValueError("update() requires 'sentiment_id' and 'text' keyword arguments.")
+            sentiment_id = kwargs["sentiment_id"]
+            new_text = kwargs["text"]
+
+        return self.update_text(sentiment_id, new_text)
+
+    def update_text(self, sentiment_id: UUID, new_text: str) -> Optional[SentimentResult]:
+        """
+        Update only the *input text* associated with a sentiment record.
+
+        - We locate the corresponding request row via sentiments.request_id
+        - We update requests.input_text
+        - We DO NOT automatically re-run sentiment analysis here.
+          If you want a new analysis for the updated text, call POST /sentiments again.
         """
         conn = self.get_connection()
         cursor: MySQLCursor = conn.cursor()
         try:
+            # Find the corresponding request_id
+            cursor.execute(
+                "SELECT request_id FROM sentiments WHERE id = %s",
+                (str(sentiment_id),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            request_id = str(row[0])
+
+            # Update the original input text
+            cursor.execute(
+                """
+                UPDATE requests
+                SET input_text = %s
+                WHERE id = %s
+                """,
+                (new_text, request_id),
+            )
+            conn.commit()
+
+            # Return the updated joined view (text changes, sentiment result stays the same)
+            return self.retrieve(sentiment_id)
+        except MySQLError as err:
+            print(f"ERROR during UPDATE TEXT: {err}")
+            raise
+        finally:
+            cursor.close()
+
+    def update_with_new_analysis(
+        self,
+        sentiment_id: UUID,
+        new_text: str,
+        result_data: SentimentResult,
+    ) -> Optional[SentimentResult]:
+        """
+        Update both:
+        - the original input text in `requests.input_text`, and
+        - the sentiment fields in `sentiments`
+
+        This is used when the caller has re-run sentiment analysis for a new text
+        but wants to keep the same sentiment record ID.
+        """
+        conn = self.get_connection()
+        cursor: MySQLCursor = conn.cursor()
+        try:
+            # Find the corresponding request_id
+            cursor.execute(
+                "SELECT request_id FROM sentiments WHERE id = %s",
+                (str(sentiment_id),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            request_id = str(row[0])
+
+            # 1) Update input text on the request
+            cursor.execute(
+                """
+                UPDATE requests
+                SET input_text = %s
+                WHERE id = %s
+                """,
+                (new_text, request_id),
+            )
+
+            # 2) Update sentiment result (keep the same sentiment_id)
             cursor.execute(
                 """
                 UPDATE sentiments
-                SET sentiment = %s, confidence = %s, analyzed_at = %s
+                SET sentiment = %s,
+                    confidence = %s,
+                    analyzed_at = %s
                 WHERE id = %s
                 """,
                 (
-                    new_data.sentiment,
-                    new_data.confidence,
-                    new_data.analyzed_at,
+                    result_data.sentiment,
+                    result_data.confidence,
+                    result_data.analyzed_at,
                     str(sentiment_id),
                 ),
             )
-            conn.commit()  # explicit commit for safety
-            if cursor.rowcount == 0:
-                return None
+
+            conn.commit()
             return self.retrieve(sentiment_id)
         except MySQLError as err:
-            print(f"ERROR during UPDATE: {err}")
+            print(f"ERROR during UPDATE WITH NEW ANALYSIS: {err}")
             raise
         finally:
             cursor.close()
