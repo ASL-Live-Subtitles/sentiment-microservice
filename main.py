@@ -14,6 +14,7 @@ from models.sentiment import TextInput, SentimentResult, SentimentUpdate, Sentim
 from db.sentiment_service import SentimentMySQLService
 
 import os
+import time
 
 print(f"DB_HOST={os.environ.get('DB_HOST')}, DB_USER={os.environ.get('DB_USER')}")
 
@@ -118,12 +119,20 @@ def run_sentiment_job(job_id: UUID, text: str) -> None:
     if not job:
         return  # Should not happen, but guard anyway
 
+    # --- Simulate real-world delay: queue waiting time (still "pending") ---
+    # During this period, GET /sentiment-async/{job_id} will usually see status = "pending"
+    time.sleep(5)
+
     # Mark job as running
     job.status = "running"
     job.updated_at = now
     sentiment_jobs[job_id] = job
 
     try:
+        # --- Simulate processing time while status = "running" ---
+        # During this period, polling will usually see status = "running"
+        time.sleep(5)
+
         # Run "real" sentiment creation (same as your sync POST /sentiments)
         result = sentiment_analysis(text)
         with SentimentMySQLService() as service:
